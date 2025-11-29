@@ -46,14 +46,16 @@ venv.bak/
 secrets.toml
 .streamlit/secrets.toml
 
-# Model files (large files - download from Hugging Face instead)
-*.pth
-*.pt
-*.onnx
+# Model files - INCLUDED for Railway deployment
+# *.pth
+# *.pt
+# *.onnx
+# yolo_seal_model/
+
+# Other model files (excluded)
 *.pb
 *.h5
 *.bin
-yolo_seal_model/
 models/
 checkpoints/
 
