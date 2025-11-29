@@ -50,7 +50,7 @@ secrets.toml
 # *.pth
 # *.pt
 # *.onnx
-# yolo_seal_model/
+# models/
 
 # Other model files (excluded)
 *.pb

@@ -17,7 +17,7 @@ def check_requirements():
         "vit_seal_checker.pth",
         "vit_seal_classifier.py",
         "yolo_seal_detector.py",
-        "yolo_seal_model/best.pt"
+        "models/best.pt"
     ]
     
     missing_files = []

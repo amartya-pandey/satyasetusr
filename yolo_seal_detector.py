@@ -17,7 +17,7 @@ try:
     YOLO_AVAILABLE = True
 except ImportError:
     YOLO_AVAILABLE = False
-    print("⚠️ Ultralytics not available. Install with: pip install ultralytics")
+    print("Ultralytics not available. \nRun: pip install ultralytics")
 
 class YOLOSealDetector:
     """
@@ -25,7 +25,7 @@ class YOLOSealDetector:
     Integrates seamlessly with Streamlit app.
     """
     
-    def __init__(self, model_path='yolo_seal_model/best.pt', device=None):
+    def __init__(self, model_path='models/best.pt', device=None):
         """
         Initialize YOLOv8 seal detector.
         
@@ -46,7 +46,7 @@ class YOLOSealDetector:
     def load_model(self):
         """Load the trained YOLOv8 model with Streamlit caching."""
         if not YOLO_AVAILABLE:
-            st.error("❌ YOLOv8 not available. Please install: pip install ultralytics")
+            st.error("YOLOv8 not available. \nRun: pip install ultralytics")
             return False
         
         # Check if model is already loaded AND model object exists
@@ -62,7 +62,7 @@ class YOLOSealDetector:
                     self.is_loaded = True
                     return True
                 except Exception as e:
-                    st.error(f"❌ Error reloading YOLO model: {e}")
+                    st.error(f"Error reloading YOLO model: {e}")
                     st.session_state.yolo_model_loaded = False
                     self.is_loaded = False
         
@@ -81,7 +81,7 @@ class YOLOSealDetector:
                 except:
                     model_url = os.getenv("YOLO_MODEL_URL", default_url)
                 
-                st.info(f"📥 Downloading YOLOv8 model from Hugging Face...")
+                st.info(f"Downloading YOLOv8 model from Hugging Face...")
                 st.write("This is a one-time download (6 MB). Future runs will use the cached model.")
                 
                 # Create directory if needed
@@ -103,11 +103,11 @@ class YOLOSealDetector:
                                 f.write(chunk)
                                 downloaded += len(chunk)
                 
-                st.success(f"✅ Model downloaded successfully!")
+                st.success(f"Model downloaded successfully!")
                 
             except Exception as e:
-                st.error(f"❌ Failed to download YOLO model: {e}")
-                st.info("💡 Falling back to YOLOv8 default model...")
+                st.error(f"Failed to download YOLO model: {e}")
+                st.info("Falling back to YOLOv8 default model...")
                 # Use default YOLOv8 model as fallback
                 try:
                     self.model = YOLO('yolov8n.pt')  # Nano model
@@ -439,7 +439,7 @@ def check_yolo_integration():
         st.warning("⚠️ YOLOv8 not installed. Install with: `pip install ultralytics`")
         return False
     
-    model_path = 'yolo_seal_model/best.pt'
+    model_path = 'models/best.pt'
     
     # Check if model exists locally or can be downloaded from Hugging Face
     if not os.path.exists(model_path):
@@ -455,7 +455,7 @@ def check_yolo_integration():
         else:
             st.warning(f"⚠️ YOLOv8 model not found at: {model_path}")
             st.info("💡 **Option 1**: Model will auto-download from Hugging Face on first use")
-            st.info("💡 **Option 2**: Download from Kaggle and place in yolo_seal_model/ directory")
+            st.info("💡 **Option 2**: Download from Kaggle and place in models/ directory")
             return True  # Still return True - will download on first use
     
     return True
