@@ -87,3 +87,21 @@ htmlcov/
 # Documentation builds
 docs/_build/
 site/
+
+# Exclude unnecessary demo/deployment markdown files
+DEPLOYMENT_SUCCESS.md
+LOCAL_DEPLOYMENT.md
+QUICKSTART_COMMANDS.md
+README_LOCAL_DEPLOYMENT.md
+API_GUIDE.md
+
+# Exclude old/backup files
+api_old.py
+*_old.*
+*.bak
+
+# Exclude test notebooks
+a.ipynb
+
+# Exclude batch files
+*.bat

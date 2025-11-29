@@ -397,7 +397,7 @@ def main():
             
             if enable_seal_verification:
                 # Check if ViT model exists OR if we have HuggingFace URL configured
-                model_exists = os.path.exists('vit_seal_checker.pth') and VIT_AVAILABLE
+                model_exists = os.path.exists('vit_seal_checker_model_state_dict.pth') and VIT_AVAILABLE
                 
                 # Check if we can download from HuggingFace
                 can_download = False
