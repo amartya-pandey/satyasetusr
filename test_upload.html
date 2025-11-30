@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Certificate Verifier - Local Testing</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .upload-area {
+            border: 3px dashed #007bff;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            margin: 20px 0;
+            background: #f8f9fa;
+            cursor: pointer;
+        }
+        .upload-area:hover {
+            background: #e9ecef;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .btn {
+            background: #007bff;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        .btn:hover {
+            background: #0056b3;
+        }
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .results {
+            margin-top: 30px;
+        }
+        .result-card {
+            background: #f8f9fa;
+            padding: 20px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border-left: 5px solid #007bff;
+        }
+        .authentic {
+            border-left-color: #28a745;
+            background: #d4edda;
+        }
+        .fake {
+            border-left-color: #dc3545;
+            background: #f8d7da;
+        }
+        .suspicious {
+            border-left-color: #ffc107;
+            background: #fff3cd;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            font-size: 18px;
+            color: #007bff;
+        }
+        .file-list {
+            margin: 10px 0;
+            padding: 10px;
+            background: #e9ecef;
+            border-radius: 5px;
+        }
+        .summary {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .summary-stat {
+            display: inline-block;
+            margin: 0 15px;
+            font-weight: bold;
+        }
+        .details {
+            font-size: 14px;
+            color: #666;
+            margin-top: 10px;
+        }
+        .confidence {
+            font-weight: bold;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎓 Certificate Verifier</h1>
+        <p style="text-align: center; color: #666;">Upload one or multiple certificates for verification</p>
+        
+        <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+            <h3>📁 Drop certificates here or click to upload</h3>
+            <p>Supports: JPG, PNG (Single or Multiple files)</p>
+            <input type="file" id="fileInput" accept="image/*" multiple>
+        </div>
+        
+        <div id="fileList" class="file-list" style="display: none;">
+            <strong>Selected Files:</strong>
+            <ul id="fileNames"></ul>
+        </div>
+        
+        <div style="text-align: center;">
+            <button class="btn" onclick="uploadFiles()" id="uploadBtn" disabled>
+                🚀 Verify Certificates
+            </button>
+            <button class="btn" onclick="clearFiles()" style="background: #6c757d;">
+                🗑️ Clear
+            </button>
+        </div>
+        
+        <div id="loading" class="loading" style="display: none;">
+            ⏳ Verifying certificates... Please wait...
+        </div>
+        
+        <div id="results" class="results"></div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const fileNames = document.getElementById('fileNames');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const loading = document.getElementById('loading');
+        const results = document.getElementById('results');
+        
+        fileInput.addEventListener('change', function() {
+            if (this.files.length > 0) {
+                fileList.style.display = 'block';
+                fileNames.innerHTML = '';
+                for (let file of this.files) {
+                    const li = document.createElement('li');
+                    li.textContent = file.name;
+                    fileNames.appendChild(li);
+                }
+                uploadBtn.disabled = false;
+            }
+        });
+        
+        function clearFiles() {
+            fileInput.value = '';
+            fileList.style.display = 'none';
+            fileNames.innerHTML = '';
+            uploadBtn.disabled = true;
+            results.innerHTML = '';
+        }
+        
+        async function uploadFiles() {
+            const files = fileInput.files;
+            if (files.length === 0) {
+                alert('Please select at least one certificate');
+                return;
+            }
+            
+            if (files.length > 10) {
+                alert('Maximum 10 certificates allowed per batch');
+                return;
+            }
+            
+            // Show loading
+            loading.style.display = 'block';
+            results.innerHTML = '';
+            uploadBtn.disabled = true;
+            
+            // Prepare form data
+            const formData = new FormData();
+            for (let file of files) {
+                formData.append('files', file);
+            }
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/verify', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                loading.style.display = 'none';
+                uploadBtn.disabled = false;
+                
+                if (data.batch) {
+                    // Batch results
+                    displayBatchResults(data);
+                } else {
+                    // Single result
+                    displaySingleResult(data);
+                }
+                
+            } catch (error) {
+                loading.style.display = 'none';
+                uploadBtn.disabled = false;
+                results.innerHTML = `
+                    <div class="result-card fake">
+                        <h3>❌ Error</h3>
+                        <p>${error.message}</p>
+                        <p>Make sure the API is running on http://localhost:8000</p>
+                    </div>
+                `;
+            }
+        }
+        
+        function displaySingleResult(data) {
+            const decision = data.decision || 'UNKNOWN';
+            const confidence = data.confidence || 0;
+            const className = decision.toLowerCase();
+            const icon = decision === 'AUTHENTIC' ? '✅' : decision === 'FAKE' ? '❌' : '⚠️';
+            
+            results.innerHTML = `
+                <div class="result-card ${className}">
+                    <h2>${icon} ${decision}</h2>
+                    <p class="confidence">Confidence: ${(confidence * 100).toFixed(1)}%</p>
+                    <p>${data.reason}</p>
+                    <div class="details">
+                        <p><strong>Processing Time:</strong> ${data.processing_time_seconds}s</p>
+                        <p><strong>Registration Number:</strong> ${data.details?.registration_number || 'Not found'}</p>
+                        <p><strong>Database Match:</strong> ${data.details?.database_match ? 'Yes' : 'No'}</p>
+                        ${data.details?.seal_verification ? `
+                            <p><strong>Seals Detected:</strong> ${data.details.seal_verification.total_seals || 0}</p>
+                            <p><strong>Seal Status:</strong> ${data.details.seal_verification.seal_status || 'N/A'}</p>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }
+        
+        function displayBatchResults(data) {
+            let html = `
+                <div class="summary">
+                    <h3>📊 Batch Summary</h3>
+                    <span class="summary-stat">Total: ${data.total_certificates}</span>
+                    <span class="summary-stat" style="color: #28a745;">✅ Authentic: ${data.summary.authentic_count}</span>
+                    <span class="summary-stat" style="color: #dc3545;">❌ Fake: ${data.summary.fake_count}</span>
+                    <span class="summary-stat" style="color: #ffc107;">⚠️ Suspicious: ${data.summary.suspicious_count}</span>
+                    <span class="summary-stat" style="color: #6c757d;">🔴 Errors: ${data.summary.error_count}</span>
+                    <br><br>
+                    <span class="summary-stat">Total Time: ${data.summary.total_processing_time_seconds}s</span>
+                    <span class="summary-stat">Avg Confidence: ${(data.summary.average_confidence * 100).toFixed(1)}%</span>
+                </div>
+            `;
+            
+            // Individual results
+            for (let result of data.results) {
+                const decision = result.decision || 'ERROR';
+                const className = decision.toLowerCase();
+                const icon = decision === 'AUTHENTIC' ? '✅' : decision === 'FAKE' ? '❌' : decision === 'SUSPICIOUS' ? '⚠️' : '🔴';
+                
+                if (!result.success) {
+                    html += `
+                        <div class="result-card fake">
+                            <h3>🔴 ${result.filename}</h3>
+                            <p><strong>Error:</strong> ${result.error}</p>
+                        </div>
+                    `;
+                } else {
+                    html += `
+                        <div class="result-card ${className}">
+                            <h3>${icon} ${result.filename}</h3>
+                            <p><strong>Decision:</strong> ${decision}</p>
+                            <p class="confidence">Confidence: ${(result.confidence * 100).toFixed(1)}%</p>
+                            <p>${result.reason}</p>
+                            <div class="details">
+                                <p><strong>Processing Time:</strong> ${result.processing_time_seconds}s</p>
+                                ${result.details ? `
+                                    <p><strong>Registration:</strong> ${result.details.registration_number || 'N/A'}</p>
+                                    <p><strong>Database Match:</strong> ${result.details.database_match ? 'Yes' : 'No'}</p>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+            
+            results.innerHTML = html;
+        }
+    </script>
+</body>
+</html>
