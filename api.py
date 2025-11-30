@@ -3,15 +3,16 @@ FastAPI Certificate Verification API
 Seamlessly integrates with any website frontend
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Header
+from fastapi import FastAPI, File, UploadFile, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from typing import Optional
+from typing import Optional, List
 import uvicorn
 import tempfile
 import os
 import logging
 import time
+import asyncio
 
 # Import existing components
 try:
@@ -19,6 +20,7 @@ try:
     from verifier import CertificateVerifier
     from yolo_seal_detector import YOLOSealDetector
     from vit_seal_classifier import ViTSealClassifier
+    from image_annotator import annotate_certificate_image, create_annotated_image_url, crop_detected_seals
     COMPONENTS_AVAILABLE = True
 except ImportError as e:
     logging.error(f"Failed to import: {e}")
@@ -132,29 +134,28 @@ async def health_check():
         }
     }
 
-@app.post("/api/verify")
-async def verify_certificate(
-    file: UploadFile = File(...),
-    enable_seal_verification: bool = True
-):
+async def verify_single_certificate(
+    file_bytes: bytes,
+    filename: str,
+    enable_seal_verification: bool = True,
+    return_annotated_image: bool = False
+) -> dict:
     """
-    Verify certificate image
+    Internal function to verify a single certificate
     
     Args:
-        file: Certificate image (PNG/JPG/JPEG)
+        file_bytes: Certificate image bytes
+        filename: Original filename
         enable_seal_verification: Enable AI seal detection
+        return_annotated_image: Include annotated image with seal boxes in response
     
     Returns:
-        JSON with verification results
+        dict with verification results
     """
+    start_time = time.time()
     
     if not MODELS_LOADED:
         raise HTTPException(503, "Models loading, try again")
-    
-    if not file.content_type.startswith('image/'):
-        raise HTTPException(400, f"Invalid file type: {file.content_type}")
-    
-    file_bytes = await file.read()
     
     if len(file_bytes) > 10 * 1024 * 1024:
         raise HTTPException(400, "File too large (max 10MB)")
@@ -165,7 +166,8 @@ async def verify_certificate(
     try:
         # Create temp file
         temp_dir = tempfile.mkdtemp()
-        temp_path = os.path.join(temp_dir, f"cert_{int(time.time())}.{file.filename.split('.')[-1]}")
+        file_ext = filename.split('.')[-1] if '.' in filename else 'jpg'
+        temp_path = os.path.join(temp_dir, f"cert_{int(time.time())}.{file_ext}")
         
         with open(temp_path, 'wb') as f:
             f.write(file_bytes)
@@ -186,15 +188,17 @@ async def verify_certificate(
         
         # Step 2: Database verification
         logger.info("Verifying database...")
-        verification_result = verifier.verify_certificate(ocr_result, file.filename)
+        verification_result = verifier.verify_certificate(ocr_result, filename)
         
         # Step 3: Seal detection
         seal_result = None
+        seal_detections = []
         if enable_seal_verification:
             logger.info("Detecting seals...")
             
             try:
                 summary = yolo_detector.get_detection_summary(temp_path, confidence_threshold=0.5)
+                seal_detections = summary.get('detections', [])
                 
                 if summary['total_seals'] > 0:
                     fake_count = summary['class_distribution'].get('fake', 0)
@@ -266,11 +270,27 @@ async def verify_certificate(
         except:
             pass
         
-        return {
+        processing_time = time.time() - start_time
+        
+        # Generate annotated image and cropped seals if requested
+        annotated_image = None
+        cropped_seals = []
+        if return_annotated_image and seal_detections:
+            try:
+                logger.info("Generating annotated image...")
+                annotated_image = annotate_certificate_image(file_bytes, seal_detections)
+                
+                logger.info("Cropping detected seals...")
+                cropped_seals = crop_detected_seals(file_bytes, seal_detections)
+            except Exception as e:
+                logger.error(f"Error annotating image: {e}")
+        
+        response_data = {
             "success": True,
             "decision": final_decision,
             "confidence": round(confidence, 3),
             "reason": reason,
+            "processing_time_seconds": round(processing_time, 2),
             "details": {
                 "registration_number": verification_result.get('registration_no'),
                 "database_match": verification_result.get('db_record') is not None,
@@ -283,24 +303,217 @@ async def verify_certificate(
                 "seal_verification": seal_result,
                 "extracted_fields": verification_result.get('ocr_extracted', {})
             },
-            "filename": file.filename
+            "filename": filename
         }
+        
+        # Add annotated image to response if generated
+        if annotated_image:
+            response_data["annotated_image"] = annotated_image
+            response_data["annotated_image_url"] = create_annotated_image_url(annotated_image)
+        
+        # Add cropped seals to response if generated
+        if cropped_seals:
+            response_data["cropped_seals"] = cropped_seals
+        
+        return response_data
         
     except Exception as e:
         logger.error(f"Error: {e}")
         raise HTTPException(500, f"Verification failed: {str(e)}")
 
-@app.post("/api/verify/simple")
-async def verify_simple(file: UploadFile = File(...)):
-    """Simplified endpoint - just decision"""
-    result = await verify_certificate(file)
+@app.post("/api/verify")
+async def verify_certificate(
+    files: List[UploadFile] = File(...),
+    enable_seal_verification: bool = Query(True, description="Enable AI seal detection"),
+    return_image: bool = Query(False, description="Return annotated image with seal bounding boxes")
+):
+    """
+    Verify single or multiple certificate images
     
-    if isinstance(result, dict) and result.get('success'):
-        return {
-            "decision": result['decision'],
-            "confidence": result['confidence'],
-            "reason": result['reason']
+    Args:
+        files: Certificate image(s) (PNG/JPG/JPEG)
+        enable_seal_verification: Enable AI seal detection
+        return_image: Return annotated image with colored boxes around seals (green=authentic, red=fake)
+    
+    Returns:
+        JSON with verification results (single format or batch format)
+        If return_image=true, includes base64 encoded annotated image
+    """
+    
+    if not MODELS_LOADED:
+        raise HTTPException(503, "Models loading, try again")
+    
+    # Validate file count
+    if len(files) > 10:
+        raise HTTPException(400, "Maximum 10 certificates per request")
+    
+    # Single file - return original format for backward compatibility
+    if len(files) == 1:
+        file = files[0]
+        
+        if not file.content_type.startswith('image/'):
+            raise HTTPException(400, f"Invalid file type: {file.content_type}")
+        
+        file_bytes = await file.read()
+        
+        try:
+            result = await verify_single_certificate(
+                file_bytes, 
+                file.filename, 
+                enable_seal_verification,
+                return_image
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Single verification error: {e}")
+            raise HTTPException(500, f"Verification failed: {str(e)}")
+    
+    # Multiple files - batch processing
+    batch_start_time = time.time()
+    results = []
+    failed_count = 0
+    
+    # Process files with concurrency limit
+    semaphore = asyncio.Semaphore(3)  # Max 3 concurrent
+    
+    async def process_one_file(file: UploadFile):
+        async with semaphore:
+            try:
+                # Validate file type
+                if file.content_type and not file.content_type.startswith('image/'):
+                    return {
+                        "filename": file.filename,
+                        "success": False,
+                        "error": f"Invalid file type: {file.content_type}",
+                        "decision": None
+                    }
+                
+                # If no content_type, check file extension
+                if not file.content_type:
+                    ext = file.filename.split('.')[-1].lower() if '.' in file.filename else ''
+                    if ext not in ['jpg', 'jpeg', 'png', 'gif', 'bmp']:
+                        return {
+                            "filename": file.filename,
+                            "success": False,
+                            "error": f"Invalid file extension: {ext}",
+                            "decision": None
+                        }
+                
+                # Validate file size
+                file_bytes = await file.read()
+                if len(file_bytes) > 5 * 1024 * 1024:  # 5MB limit per file in batch
+                    return {
+                        "filename": file.filename,
+                        "success": False,
+                        "error": "File too large (max 5MB in batch mode)",
+                        "decision": None
+                    }
+                
+                if len(file_bytes) == 0:
+                    return {
+                        "filename": file.filename,
+                        "success": False,
+                        "error": "Empty file",
+                        "decision": None
+                    }
+                
+                # Verify certificate
+                result = await verify_single_certificate(
+                    file_bytes,
+                    file.filename,
+                    enable_seal_verification,
+                    return_image
+                )
+                
+                batch_result = {
+                    "filename": file.filename,
+                    "success": True,
+                    "decision": result.get("decision"),
+                    "confidence": result.get("confidence"),
+                    "reason": result.get("reason"),
+                    "processing_time_seconds": result.get("processing_time_seconds"),
+                    "details": result.get("details"),
+                    "error": None
+                }
+                
+                # Include annotated image if requested
+                if return_image and result.get("annotated_image"):
+                    batch_result["annotated_image"] = result.get("annotated_image")
+                    batch_result["annotated_image_url"] = result.get("annotated_image_url")
+                
+                # Include cropped seals if available
+                if return_image and result.get("cropped_seals"):
+                    batch_result["cropped_seals"] = result.get("cropped_seals")
+                
+                return batch_result
+                
+            except Exception as e:
+                logger.error(f"Error processing {file.filename}: {e}")
+                return {
+                    "filename": file.filename,
+                    "success": False,
+                    "error": str(e),
+                    "decision": None
+                }
+    
+    # Process all files concurrently
+    logger.info(f"Processing batch of {len(files)} certificates...")
+    results = await asyncio.gather(*[process_one_file(f) for f in files])
+    
+    # Calculate statistics
+    authentic_count = sum(1 for r in results if r.get("decision") == "AUTHENTIC")
+    fake_count = sum(1 for r in results if r.get("decision") == "FAKE")
+    suspicious_count = sum(1 for r in results if r.get("decision") == "SUSPICIOUS")
+    failed_count = sum(1 for r in results if not r.get("success"))
+    processed_count = len(results) - failed_count
+    
+    total_confidence = sum(r.get("confidence", 0) for r in results if r.get("success"))
+    avg_confidence = total_confidence / processed_count if processed_count > 0 else 0
+    
+    total_time = time.time() - batch_start_time
+    
+    return {
+        "batch": True,
+        "total_certificates": len(files),
+        "processed": processed_count,
+        "failed": failed_count,
+        "results": results,
+        "summary": {
+            "authentic_count": authentic_count,
+            "fake_count": fake_count,
+            "suspicious_count": suspicious_count,
+            "error_count": failed_count,
+            "total_processing_time_seconds": round(total_time, 2),
+            "average_confidence": round(avg_confidence, 3)
         }
+    }
+
+@app.post("/api/verify/simple")
+async def verify_simple(files: List[UploadFile] = File(...)):
+    """Simplified endpoint - just decision"""
+    result = await verify_certificate(files)
+    
+    if isinstance(result, dict):
+        if result.get('batch'):
+            # Batch response - simplify
+            return {
+                "batch": True,
+                "results": [
+                    {
+                        "filename": r["filename"],
+                        "decision": r.get("decision"),
+                        "confidence": r.get("confidence")
+                    }
+                    for r in result["results"]
+                ]
+            }
+        else:
+            # Single response
+            return {
+                "decision": result.get('decision'),
+                "confidence": result.get('confidence'),
+                "reason": result.get('reason')
+            }
     return result
 
 @app.get("/api/status")
