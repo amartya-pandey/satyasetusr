@@ -32,10 +32,11 @@ class CertificateVerifier:
         
         # Field weights for final score calculation
         self.field_weights = {
-            'name': 0.4,
-            'institution': 0.3,
-            'degree': 0.2,
-            'year': 0.1
+            'name': 0.35,
+            'father_name': 0.25,  # Father's name is important for verification
+            'institution': 0.2,
+            'degree': 0.15,
+            'year': 0.05
         }
         
         # Decision thresholds (more realistic for OCR scenarios)
@@ -329,9 +330,12 @@ class CertificateVerifier:
             'year': None
         }
         
-        # First try generic extraction (works without database record)
-        extracted.update(self._extract_fields_generic(text, lines, words))
+        # If NO database record, return empty fields (registration not found = reject)
+        if not db_record:
+            extracted['raw_text'] = text
+            return extracted
         
+        # Database record exists - use it to guide extraction (PRIMARY METHOD)
         # Smart name extraction using fuzzy matching with database name
         if db_record.get('name'):
             db_name = db_record['name'].upper()
@@ -366,6 +370,26 @@ class CertificateVerifier:
                     best_name_match = ' '.join(found_parts)
             
             extracted['name'] = best_name_match
+        
+        # Extract father's name if available in database
+        if db_record.get('father_name'):
+            db_father = db_record['father_name'].upper()
+            
+            # Look for father's name in text
+            best_father_match = None
+            best_father_score = 0
+            
+            for i in range(len(words)):
+                for j in range(i + 1, min(i + 4, len(words) + 1)):
+                    candidate = ' '.join(words[i:j]).upper()
+                    if not any(skip in candidate for skip in ['CERTIFICATE', 'UNIVERSITY', 'COLLEGE', 'INSTITUTE']):
+                        score = fuzz.ratio(candidate, db_father) / 100.0
+                        if score > best_father_score and score > 0.6:
+                            best_father_score = score
+                            best_father_match = candidate
+            
+            if best_father_match:
+                extracted['father_name'] = best_father_match
         
         # Smart institution extraction
         if db_record.get('institution'):
@@ -474,7 +498,7 @@ class CertificateVerifier:
         scores = {}
         
         # Compare name - use multiple fuzzy matching methods
-        if db_record['name'] and ocr_extracted['name']:
+        if db_record.get('name') and ocr_extracted.get('name'):
             name_db = db_record['name'].upper().strip()
             name_ocr = ocr_extracted['name'].upper().strip()
             
@@ -487,8 +511,21 @@ class CertificateVerifier:
         else:
             scores['name'] = 0.0
         
+        # Compare father's name if available
+        if db_record.get('father_name') and ocr_extracted.get('father_name'):
+            father_db = db_record['father_name'].upper().strip()
+            father_ocr = ocr_extracted['father_name'].upper().strip()
+            
+            ratio_score = fuzz.ratio(father_db, father_ocr) / 100.0
+            partial_score = fuzz.partial_ratio(father_db, father_ocr) / 100.0
+            token_sort_score = fuzz.token_sort_ratio(father_db, father_ocr) / 100.0
+            
+            scores['father_name'] = max(ratio_score, partial_score, token_sort_score)
+        else:
+            scores['father_name'] = 0.0
+        
         # Compare institution - be more lenient with formatting
-        if db_record['institution'] and ocr_extracted['institution']:
+        if db_record.get('institution') and ocr_extracted.get('institution'):
             inst_db = db_record['institution'].upper().strip()
             inst_ocr = ocr_extracted['institution'].upper().strip()
             
@@ -508,7 +545,7 @@ class CertificateVerifier:
             scores['institution'] = 0.0
         
         # Compare degree - handle abbreviations and variations
-        if db_record['degree'] and ocr_extracted['degree']:
+        if db_record.get('degree') and ocr_extracted.get('degree'):
             degree_db = db_record['degree'].upper().strip()
             degree_ocr = ocr_extracted['degree'].upper().strip()
             
@@ -542,7 +579,7 @@ class CertificateVerifier:
             scores['degree'] = 0.0
         
         # Compare year - be more tolerant of nearby years
-        if db_record['year'] and ocr_extracted['year']:
+        if db_record.get('year') and ocr_extracted.get('year'):
             year_diff = abs(db_record['year'] - ocr_extracted['year'])
             if year_diff == 0:
                 scores['year'] = 1.0
