@@ -23,7 +23,9 @@ venv/
 # Build artifacts
 dist/
 build/
-*.db
 
 # Node stuff (just in case)
 node_modules/
+
+# Keep the certificate database
+!certs.db
