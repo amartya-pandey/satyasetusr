@@ -141,6 +141,90 @@ class CertificateVerifier:
             'confidence': ocr_result.get('confidence', 0.5)
         }
     
+    def _extract_fields_generic(self, text: str, lines: List[str], words: List[str]) -> Dict[str, Any]:
+        """Extract fields using generic patterns (without database guidance)."""
+        result = {}
+        
+        # Extract year using common patterns
+        year_patterns = [
+            r'(?:August|September|October|November|December|January|February|March|April|May|June|July)\s+(\d{4})',
+            r'Year:?\s*(\d{4})',
+            r'Datel?\s+\d+\s+(?:August|September|October|November|December|January|February|March|April|May|June|July)\s+(\d{4})',
+            r'\b(20\d{2}|19\d{2})\b'
+        ]
+        
+        years_found = []
+        for pattern in year_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in matches:
+                year = int(match) if isinstance(match, str) else int(match[0])
+                if 1990 <= year <= 2030 and year not in years_found:
+                    years_found.append(year)
+        
+        if years_found:
+            result['year'] = years_found[0]  # Use first found year
+        
+        # Extract institution - look for keywords
+        institution_keywords = ['UNIVERSITY', 'COLLEGE', 'INSTITUTE', 'ACADEMY', 'SCHOOL', 'TECHNOLOGY']
+        for line in lines:
+            line_upper = line.upper()
+            if any(keyword in line_upper for keyword in institution_keywords):
+                # Check if line is substantial (not just keyword)
+                if len(line) > 10:
+                    result['institution'] = line
+                    break
+        
+        # Extract degree - look for common patterns
+        degree_patterns = {
+            'BACHELOR': r'BACHELOR\s+(?:OF\s+)?(?:COMPUTER|BUSINESS|COMMERCE|SCIENCE|ARTS|TECHNOLOGY|ENGINEERING)',
+            'BCA': r'\bBCA\b',
+            'BBA': r'\bBBA\b',
+            'BCOM': r'\bBCOM\b|B\.COM\b',
+            'BSC': r'\bBSC\b|B\.SC\b',
+            'BTECH': r'\bB\.?TECH\b',
+            'BE': r'\bBE\b|B\.E\b',
+            'MTECH': r'\bM\.?TECH\b',
+            'MSC': r'\bMSC\b|M\.SC\b',
+            'DIPLOMA': r'\bDIPLOMA\b'
+        }
+        
+        for line in lines:
+            for degree_name, pattern in degree_patterns.items():
+                if re.search(pattern, line, re.IGNORECASE):
+                    result['degree'] = line
+                    break
+            if result.get('degree'):
+                break
+        
+        # Extract name - look for patterns like "Name of the Student" or names after common phrases
+        name_patterns = [
+            r'(?:Name\s+of\s+(?:the\s+)?Student|Student\s+Name|Name)\s*[:\-]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
+            r'(?:Father(?:\'?s)?\s+Name|Mother(?:\'?s)?\s+Name)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
+            r'(?:certify\s+that|this\s+is\s+to\s+certify\s+that)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
+        ]
+        
+        for pattern in name_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                result['name'] = match.group(1).strip()
+                break
+        
+        # Alternative name extraction: look for capitalized sequences
+        if not result.get('name'):
+            for i, line in enumerate(lines):
+                # Skip first 2 lines (usually headers)
+                if i < 2:
+                    continue
+                # Look for lines with multiple capitalized words (likely names)
+                cap_words = re.findall(r'\b[A-Z][a-z]+\b', line)
+                if 2 <= len(cap_words) <= 5:  # Typical name length
+                    # Avoid institution names or common words
+                    if not any(keyword in line.upper() for keyword in ['UNIVERSITY', 'COLLEGE', 'INSTITUTE', 'CERTIFICATE', 'COMPLETION']):
+                        result['name'] = ' '.join(cap_words)
+                        break
+        
+        return result
+    
     def _extract_registration_numbers(self, text: str) -> List[str]:
         """Extract potential registration numbers from OCR text."""
         reg_numbers = []
@@ -244,6 +328,9 @@ class CertificateVerifier:
             'degree': None,
             'year': None
         }
+        
+        # First try generic extraction (works without database record)
+        extracted.update(self._extract_fields_generic(text, lines, words))
         
         # Smart name extraction using fuzzy matching with database name
         if db_record.get('name'):
