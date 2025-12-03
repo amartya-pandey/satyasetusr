@@ -17,7 +17,8 @@ import asyncio
 # Import existing components
 try:
     from ocr_client import OCRClient
-    from verifier import CertificateVerifier
+    # Use Supabase cloud database instead of local SQLite
+    from verifier_supabase import SupabaseCertificateVerifier as CertificateVerifier
     from yolo_seal_detector import YOLOSealDetector
     from vit_seal_classifier import ViTSealClassifier
     from image_annotator import annotate_certificate_image, create_annotated_image_url, crop_detected_seals
